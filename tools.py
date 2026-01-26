@@ -1,45 +1,44 @@
-# This file defines what your agent can do. We will give it three specific skills: checking stocks (yfinance), checking mutual funds (using the free Indian mfapi.in public API), and searching the web for news (DuckDuckGo).
 import requests
 import yfinance as yf
 from duckduckgo_search import DDGS
 
 def search_assets_tool(query):
     """
-    Searches for Stocks (via Yahoo Finance/DDG) and Mutual Funds (via MFAPI).
-    Returns a combined list of results.
+    Searches for Stocks (via Yahoo Finance API) and Mutual Funds (via MFAPI).
     """
     results = []
     
-    # --- 1. SEARCH STOCKS & ETFs (Improved Logic) ---
-    # We search specifically for the Yahoo Finance URL patterns
+    # --- 1. SEARCH STOCKS (Fixed: Using Yahoo Typeahead API) ---
+    # This is the official-ish endpoint Yahoo uses for its own search bar.
+    # It returns structured JSON, so no more brittle scraping.
     try:
-        # Broader search query to catch ETFs and Stocks
-        search_query = f"site:in.finance.yahoo.com/quote {query}"
-        ddg_results = DDGS().text(keywords=search_query, region="in-en", max_results=8)
+        url = "https://query2.finance.yahoo.com/v1/finance/search"
+        headers = {'User-Agent': 'Mozilla/5.0'} # Required to avoid 403 error
+        params = {
+            'q': query,
+            'quotesCount': 10,
+            'newsCount': 0,
+            'enableFuzzyQuery': 'false',
+            'quotesQueryId': 'tss_match_phrase_query'
+        }
         
-        for r in ddg_results:
-            # URL format usually: https://in.finance.yahoo.com/quote/RELIANCE.NS/
-            url = r.get('href', '')
-            title = r.get('title', '')
-            
-            if '/quote/' in url:
-                parts = url.split('/quote/')
-                if len(parts) > 1:
-                    # Ticker is usually the part after quote/ and before /
-                    ticker = parts[1].split('/')[0]
-                    
-                    # Only accept Indian tickers (.NS or .BO)
-                    if ".NS" in ticker or ".BO" in ticker:
-                        # Clean up title for display (Remove " - Yahoo Finance" etc)
-                        clean_title = title.split("Price")[0].strip().replace(" - Yahoo Finance", "")
-                        
-                        # Avoid duplicates
-                        if not any(x['id'] == ticker for x in results):
-                            results.append({
-                                "name": clean_title if clean_title else ticker,
-                                "id": ticker,
-                                "type": "STOCK"
-                            })
+        resp = requests.get(url, headers=headers, params=params)
+        data = resp.json()
+        
+        if 'quotes' in data:
+            for item in data['quotes']:
+                # Filter strictly for Indian Exchanges (NSE/BSE)
+                # 'exchDisp' usually contains 'NSE' or 'BSE'
+                exchange = item.get('exchDisp', '').upper()
+                symbol = item.get('symbol', '')
+                
+                # Check if it is an Indian Equity
+                if (exchange in ['NSE', 'BSE'] or symbol.endswith('.NS') or symbol.endswith('.BO')) and item.get('quoteType') == 'EQUITY':
+                    results.append({
+                        "name": item.get('shortname', symbol),
+                        "id": symbol, # This will be something like 'RELIANCE.NS'
+                        "type": "STOCK"
+                    })
     except Exception as e:
         print(f"Stock search error: {e}")
 
